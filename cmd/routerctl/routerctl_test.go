@@ -14,7 +14,7 @@ import (
 
 func TestVersionCommandFormsReportInjectedVersion(t *testing.T) {
 	originalVersion := version
-	version = "v0.2.0"
+	version = "0.2.0"
 	t.Cleanup(func() { version = originalVersion })
 
 	for _, args := range [][]string{{"version"}, {"--version"}} {
@@ -23,8 +23,8 @@ func TestVersionCommandFormsReportInjectedVersion(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
-		if got != "v0.2.0\n" {
-			t.Fatalf("run(%q) output = %q, want %q", args, got, "v0.2.0\\n")
+		if got != "0.2.0\n" {
+			t.Fatalf("run(%q) output = %q, want %q", args, got, "0.2.0\\n")
 		}
 	}
 }
