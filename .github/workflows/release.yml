@@ -1,0 +1,115 @@
+name: Release routerctl
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing semantic tag to release or recover
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: routerctl-release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/setup-go@0a12fcb4e3c2e2cda2b0f5cc5f8ee68e9de6b43b
+        with:
+          go-version: 1.26.0
+      - name: Resolve release tag
+        id: tag
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          printf '%s\n' "$tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          echo "value=$tag" >> "$GITHUB_OUTPUT"
+      - name: Inspect existing release
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.value }}
+        run: |
+          if ! gh release view "$TAG" --json assets >/tmp/release.json 2>/dev/null; then
+            echo "state=absent" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          expected="routerctl_${TAG#v}_Darwin_amd64.tar.gz
+          routerctl_${TAG#v}_Darwin_arm64.tar.gz
+          routerctl_${TAG#v}_Linux_amd64.tar.gz
+          routerctl_${TAG#v}_Linux_arm64.tar.gz
+          checksums.txt"
+          actual=$(gh release view "$TAG" --json assets --jq '.assets[].name' | sort)
+          if [ "$actual" = "$(printf '%s\n' "$expected" | sort)" ]; then
+            echo "state=complete" >> "$GITHUB_OUTPUT"
+          else
+            echo "release $TAG is partial; delete or repair the release assets before rerunning this workflow" >&2
+            exit 1
+          fi
+      - name: Generate release notes
+        if: steps.existing.outputs.state == 'absent'
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5
+        with:
+          version: v2.13.1
+          config: cliff.toml
+          args: --current --strip header --output RELEASE_NOTES.md
+      - name: Publish release archives
+        if: steps.existing.outputs.state == 'absent'
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a
+        with:
+          distribution: goreleaser
+          version: v2.17.1
+          args: release --clean --release-notes RELEASE_NOTES.md
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Assert release contents and executable version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.value }}
+        run: |
+          expected="routerctl_${TAG#v}_Darwin_amd64.tar.gz
+          routerctl_${TAG#v}_Darwin_arm64.tar.gz
+          routerctl_${TAG#v}_Linux_amd64.tar.gz
+          routerctl_${TAG#v}_Linux_arm64.tar.gz
+          checksums.txt"
+          actual=$(gh release view "$TAG" --json assets --jq '.assets[].name' | sort)
+          test "$actual" = "$(printf '%s\n' "$expected" | sort)"
+          archive="routerctl_${TAG#v}_Darwin_$(uname -m).tar.gz"
+          gh release download "$TAG" --pattern "$archive" --dir release-check
+          test "$(tar -tzf "release-check/$archive" | wc -l | tr -d ' ')" = 1
+          test "$(tar -tzf "release-check/$archive")" = routerctl
+          tar -xzf "release-check/$archive" -C release-check
+          test "$(release-check/routerctl version)" = "$TAG"
+      - name: Create package-index app token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ vars.HOMELAB_RELEASE_BRIDGE_APP_ID }}
+          private-key: ${{ secrets.HOMELAB_RELEASE_BRIDGE_PRIVATE_KEY }}
+          owner: nandiheath
+          repositories: hermit-packages
+      - name: Dispatch verified release to package index
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG: ${{ steps.tag.outputs.value }}
+          RELEASE_URL: https://github.com/nandiheath/homelab-cli/releases/tag/${{ steps.tag.outputs.value }}
+        run: |
+          version=${TAG#v}
+          release_id=$(gh release view "$TAG" --json id --jq .id)
+          gh api --include --method POST repos/nandiheath/hermit-packages/dispatches \
+            -f event_type=homelab-cli-release-published \
+            -f "client_payload[source_repository]=nandiheath/homelab-cli" \
+            -f "client_payload[tag]=$TAG" \
+            -f "client_payload[version]=$version" \
+            -f "client_payload[release_id]=$release_id" \
+            -f "client_payload[release_url]=$RELEASE_URL" | grep -q '204 No Content'

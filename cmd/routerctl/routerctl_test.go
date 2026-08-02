@@ -5,11 +5,50 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestVersionCommandFormsReportInjectedVersion(t *testing.T) {
+	originalVersion := version
+	version = "v0.2.0"
+	t.Cleanup(func() { version = originalVersion })
+
+	for _, args := range [][]string{{"version"}, {"--version"}} {
+		got := captureStdout(t, func() {
+			if err := run(context.Background(), args); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if got != "v0.2.0\n" {
+			t.Fatalf("run(%q) output = %q, want %q", args, got, "v0.2.0\\n")
+		}
+	}
+}
+
+func captureStdout(t *testing.T, action func()) string {
+	t.Helper()
+	original := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	t.Cleanup(func() { os.Stdout = original })
+
+	action()
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(output)
+}
 
 func TestRenderPackageEscapesResolvedSecret(t *testing.T) {
 	secret := UCIValue{SecretRef: "op://ExampleVault/ExampleRouter/password"}

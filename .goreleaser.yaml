@@ -1,0 +1,29 @@
+version: 2
+project_name: routerctl
+
+builds:
+  - id: routerctl
+    main: ./cmd/routerctl
+    binary: routerctl
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: "routerctl_{{ .Version }}_{{ .Os | title }}_{{ .Arch }}"
+    files: []
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true

@@ -13,6 +13,9 @@ import (
 	"time"
 )
 
+var version = "dev"
+
+
 func main() {
 	context, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -39,7 +42,14 @@ func run(ctx context.Context, args []string) error {
 		printUsage()
 		return &statusError{Code: 2, Message: "a command is required"}
 	}
+	if len(args) == 1 && args[0] == "--version" {
+		fmt.Println(version)
+		return nil
+	}
 	switch args[0] {
+	case "version":
+		fmt.Println(version)
+		return nil
 	case "validate":
 		return validateCommand(args[1:])
 	case "render":
@@ -71,6 +81,8 @@ func printUsage() {
 	fmt.Print(`routerctl manages reviewed OpenWrt profiles over pinned SSH.
 
 Usage:
+  routerctl version
+  routerctl --version
   routerctl validate [--profile DIR]
   routerctl render [--profile DIR] --output DIR [--resolve-secrets]
   routerctl fingerprint --target [USER@]HOST [--port PORT]
