@@ -1,4 +1,4 @@
-package main
+package router
 
 import (
 	"context"
@@ -15,27 +15,17 @@ import (
 
 var version = "dev"
 
-
-func main() {
-	context, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if err := run(context, os.Args[1:]); err != nil {
-		var status *statusError
-		if errors.As(err, &status) {
-			fmt.Fprintln(os.Stderr, status.Error())
-			os.Exit(status.Code)
-		}
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
-	}
-}
-
 type statusError struct {
 	Code    int
 	Message string
 }
 
 func (e *statusError) Error() string { return e.Message }
+
+// Run dispatches the router subcommands of the unified homelab CLI.
+func Run(args []string) error {
+	return run(context.Background(), args)
+}
 
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
@@ -78,20 +68,19 @@ func run(ctx context.Context, args []string) error {
 }
 
 func printUsage() {
-	fmt.Print(`routerctl manages reviewed OpenWrt profiles over pinned SSH.
+	fmt.Print(`homelab router manages reviewed OpenWrt profiles over pinned SSH.
 
 Usage:
-  routerctl version
-  routerctl --version
-  routerctl validate [--profile DIR]
-  routerctl render [--profile DIR] --output DIR [--resolve-secrets]
-  routerctl fingerprint --target [USER@]HOST [--port PORT]
-  routerctl plan [--profile DIR] --target [USER@]HOST [--host-fingerprint SHA256:...] [--resolve-secrets]
-  routerctl backup [--profile DIR] --target [USER@]HOST [--host-fingerprint SHA256:...]
-  routerctl bootstrap-key [--profile DIR] --target [USER@]HOST --host-fingerprint SHA256:... --authorize INSTALL-KEY:PROFILE
-  routerctl apply [--profile DIR] --target [USER@]HOST [--host-fingerprint SHA256:...] --authorize APPLY:PROFILE [--dry-run]
-  routerctl firmware-verify [--profile DIR] --image FILE
-  routerctl upgrade [--profile DIR] --target [USER@]HOST [--host-fingerprint SHA256:...] --image FILE --authorize UPGRADE:PROFILE [--dry-run]
+  homelab router version
+  homelab router validate [--profile DIR]
+  homelab router render [--profile DIR] --output DIR [--resolve-secrets]
+  homelab router fingerprint --target [USER@]HOST [--port PORT]
+  homelab router plan [--profile DIR] --target [USER@]HOST [--host-fingerprint SHA256:...] [--resolve-secrets]
+  homelab router backup [--profile DIR] --target [USER@]HOST [--host-fingerprint SHA256:...]
+  homelab router bootstrap-key [--profile DIR] --target [USER@]HOST --host-fingerprint SHA256:... --authorize INSTALL-KEY:PROFILE
+  homelab router apply [--profile DIR] --target [USER@]HOST [--host-fingerprint SHA256:...] --authorize APPLY:PROFILE [--dry-run]
+  homelab router firmware-verify [--profile DIR] --image FILE
+  homelab router upgrade [--profile DIR] --target [USER@]HOST [--host-fingerprint SHA256:...] --image FILE --authorize UPGRADE:PROFILE [--dry-run]
 
 Safety:
   Every profile operation requires --profile DIR.

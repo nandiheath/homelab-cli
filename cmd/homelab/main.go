@@ -9,13 +9,27 @@ import (
 	"strings"
 
 	"github.com/alecthomas/kong"
+	"github.com/nandiheath/homelab-cli/internal/router"
 )
 
 var version = "dev"
 
 type CLI struct {
-	Render  Render  `cmd:"" help:"Render Kustomize sources into Kubernetes manifest files."`
+	Argocd  Argocd  `cmd:"" help:"Manage Argo CD source rendering."`
+	Router  Router  `cmd:"" help:"Manage reviewed OpenWrt router profiles."`
 	Version Version `cmd:"" help:"Print the homelab CLI version."`
+}
+
+type Argocd struct {
+	Render Render `cmd:"" help:"Render Kustomize sources into Kubernetes manifest files."`
+}
+
+type Router struct {
+	Args []string `arg:"" passthrough:""`
+}
+
+func (r Router) Run() error {
+	return router.Run(r.Args)
 }
 
 type Render struct {
