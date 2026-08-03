@@ -1,5 +1,5 @@
 version: 2
-project_name: routerctl
+project_name: homelab-cli
 
 builds:
   - id: routerctl
@@ -15,11 +15,30 @@ builds:
       - arm64
     ldflags:
       - -s -w -X main.version={{ .Version }}
+  - id: homelab
+    main: ./cmd/homelab
+    binary: homelab
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
 
 archives:
-  - id: default
+  - id: routerctl
+    ids: [routerctl]
     formats: [tar.gz]
     name_template: "routerctl_{{ .Version }}_{{ .Os | title }}_{{ .Arch }}"
+    files: []
+  - id: homelab
+    ids: [homelab]
+    formats: [tar.gz]
+    name_template: "homelab_{{ .Version }}_{{ .Os | title }}_{{ .Arch }}"
     files: []
 
 checksum:

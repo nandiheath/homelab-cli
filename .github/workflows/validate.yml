@@ -21,6 +21,7 @@ jobs:
       - run: go test ./...
       - run: go vet ./...
       - run: go build ./cmd/routerctl
+      - run: go build ./cmd/homelab
   conventional:
     name: Conventional commits
     if: github.event_name == 'pull_request'
