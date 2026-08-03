@@ -34,6 +34,7 @@ func (Version) Run() error {
 	fmt.Println(version)
 	return nil
 }
+
 func main() {
 	var cli CLI
 	ctx := kong.Parse(&cli, kong.Name("homelab"), kong.Description("Homelab operations CLI."))
