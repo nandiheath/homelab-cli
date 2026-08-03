@@ -47,32 +47,7 @@ jobs:
           CONFIRM: ${{ inputs.confirm }}
           RECOVER_TAG: ${{ inputs.recover_tag }}
           GH_TOKEN: ${{ github.token }}
-        run: |
-          test "$CONFIRM" = release || { echo 'confirm must equal release' >&2; exit 1; }
-          if [ -n "$RECOVER_TAG" ]; then
-            printf '%s\n' "$RECOVER_TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-            git rev-parse --verify "$RECOVER_TAG^{commit}" >/dev/null
-            if gh release view "$RECOVER_TAG" >/dev/null 2>&1; then
-              echo "release $RECOVER_TAG already exists" >&2
-              exit 1
-            fi
-            previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$RECOVER_TAG^" 2>/dev/null || true)
-            test -n "$previous" || { echo "no release precedes $RECOVER_TAG" >&2; exit 1; }
-            git checkout --detach "$RECOVER_TAG"
-            {
-              echo "tag=$RECOVER_TAG"
-              echo "range=$previous..$RECOVER_TAG"
-              echo "create_tag=false"
-            } >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD 2>/dev/null || true)
-          test -n "$previous" || { echo 'no previous semantic release tag found' >&2; exit 1; }
-          test "$(git rev-list --count "$previous..HEAD")" -gt 0 || { echo "no commits since $previous" >&2; exit 1; }
-          {
-            echo "range=$previous..HEAD"
-            echo "create_tag=true"
-          } >> "$GITHUB_OUTPUT"
+        run: ./scripts/resolve-release.sh >> "$GITHUB_OUTPUT"
       - name: Calculate next semantic version
         if: steps.range.outputs.create_tag == 'true'
         id: version
