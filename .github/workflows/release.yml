@@ -94,6 +94,10 @@ jobs:
             echo
             cat "$NOTES"
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove action-generated files
+        run: |
+          rm -rf git-cliff
+          test -z "$(git status --porcelain)"
       - name: Validate source
         run: |
           go test ./...
