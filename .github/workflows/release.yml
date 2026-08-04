@@ -120,6 +120,12 @@ jobs:
           args: release --clean --release-notes ${{ runner.temp }}/RELEASE_NOTES.md
         env:
           GITHUB_TOKEN: ${{ github.token }}
+      - name: Publish generated release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ runner.temp }}/RELEASE_NOTES.md
+          TAG: ${{ steps.tag.outputs.value }}
+        run: gh release edit "$TAG" --notes-file "$NOTES"
       - name: Assert release contents
         env:
           GH_TOKEN: ${{ github.token }}
