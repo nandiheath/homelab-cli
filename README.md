@@ -41,6 +41,22 @@ Render every direct child of the default `argocd/infrastructure` source root:
 homelab argocd render --all
 ```
 
+In CI, render only source directories changed by the current GitHub event. The default mapping is `argocd/infrastructure/<name>` to `artifacts/infrastructure/<name>`:
+
+```bash
+homelab argocd render --ci
+```
+
+CI mode requires a clean worktree, reads the push or pull-request base from `GITHUB_EVENT_PATH`, and falls back to `HEAD^` for manual runs. Deleting a source removes its matching output directory.
+
+After repository validation, explicitly commit artifact-only changes and push them to the current pull-request branch:
+
+```bash
+homelab argocd render --commit-and-push
+```
+
+The commit step is a no-op when artifacts are current and refuses to commit if any changed path is outside `--output-root`. `--ci --commit-and-push` combines both phases when no validation step needs to run between them.
+
 Override the roots when a repository uses another layout:
 
 ```bash
