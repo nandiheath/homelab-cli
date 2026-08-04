@@ -126,13 +126,14 @@ jobs:
           TAG: ${{ steps.tag.outputs.value }}
         run: |
           version=${TAG#v}
-          expected="homelab_${version}_Darwin_amd64.tar.gz
-          homelab_${version}_Darwin_arm64.tar.gz
-          homelab_${version}_Linux_amd64.tar.gz
-          homelab_${version}_Linux_arm64.tar.gz
-          checksums.txt"
+          expected=$(printf '%s\n' \
+            "homelab_${version}_Darwin_amd64.tar.gz" \
+            "homelab_${version}_Darwin_arm64.tar.gz" \
+            "homelab_${version}_Linux_amd64.tar.gz" \
+            "homelab_${version}_Linux_arm64.tar.gz" \
+            checksums.txt | sort)
           actual=$(gh release view "$TAG" --json assets --jq '.assets[].name' | sort)
-          test "$actual" = "$(printf '%s\n' "$expected" | sort)"
+          test "$actual" = "$expected"
           test -n "$(gh release view "$TAG" --json body --jq .body)"
       - name: Dispatch verified release to package index
         env:
