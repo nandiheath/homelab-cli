@@ -13,8 +13,6 @@ import (
 	"time"
 )
 
-var version = "dev"
-
 type statusError struct {
 	Code    int
 	Message string
@@ -23,22 +21,22 @@ type statusError struct {
 func (e *statusError) Error() string { return e.Message }
 
 // Run dispatches the router subcommands of the unified homelab CLI.
-func Run(args []string) error {
-	return run(context.Background(), args)
+func Run(args []string, buildVersion string) error {
+	return run(context.Background(), args, buildVersion)
 }
 
-func run(ctx context.Context, args []string) error {
+func run(ctx context.Context, args []string, buildVersion string) error {
 	if len(args) == 0 {
 		printUsage()
 		return &statusError{Code: 2, Message: "a command is required"}
 	}
 	if len(args) == 1 && args[0] == "--version" {
-		fmt.Println(version)
+		fmt.Println(buildVersion)
 		return nil
 	}
 	switch args[0] {
 	case "version":
-		fmt.Println(version)
+		fmt.Println(buildVersion)
 		return nil
 	case "validate":
 		return validateCommand(args[1:])
