@@ -29,7 +29,7 @@ type Router struct {
 }
 
 func (r Router) Run() error {
-	return router.Run(r.Args)
+	return router.Run(r.Args, version)
 }
 
 type Render struct {

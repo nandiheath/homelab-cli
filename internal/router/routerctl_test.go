@@ -12,14 +12,11 @@ import (
 	"testing"
 )
 
-func TestVersionCommandFormsReportInjectedVersion(t *testing.T) {
-	originalVersion := version
-	version = "0.2.0"
-	t.Cleanup(func() { version = originalVersion })
+func TestVersionCommandFormsReportBuildVersion(t *testing.T) {
 
 	for _, args := range [][]string{{"version"}, {"--version"}} {
 		got := captureStdout(t, func() {
-			if err := run(context.Background(), args); err != nil {
+			if err := run(context.Background(), args, "0.2.0"); err != nil {
 				t.Fatal(err)
 			}
 		})
