@@ -1,11 +1,11 @@
 # homelab-cli
 
-Command-line tools for repeatable homelab operations. The repository currently publishes two binaries:
+One `homelab` binary is the entrypoint for repeatable homelab operations:
 
-- `homelab` — repository-oriented operations such as rendering Argo CD Kustomize sources.
-- `routerctl` — validation, planning, backup, configuration, and firmware operations for reviewed OpenWrt profiles.
+- `homelab argocd render` renders Argo CD Kustomize sources.
+- `homelab router …` validates, plans, backs up, configures, and upgrades reviewed OpenWrt profiles.
 
-Both binaries are built for Darwin and Linux on `amd64` and `arm64`. GoReleaser publishes separate archives and a shared checksum file for each release.
+The binary is built for Darwin and Linux on `amd64` and `arm64`. GoReleaser publishes one archive per target plus checksums.
 
 ## Development
 
@@ -15,8 +15,6 @@ The module requires Go 1.26.
 go test ./...
 go vet ./...
 go build ./cmd/homelab
-go build ./cmd/routerctl
-```
 
 Validate the release configuration without publishing:
 
@@ -25,14 +23,14 @@ goreleaser check
 goreleaser release --snapshot --clean
 ```
 
-## Render Kustomize sources
+## Argo CD rendering
 
-`homelab render` delegates builds to `kustomize build --enable-helm` and uses `yq` to write one generated file per Kubernetes resource. Both executables must be available on `PATH`, or supplied with `--kustomize` and `--yq`.
+`homelab argocd render` delegates builds to `kustomize build --enable-helm` and uses `yq` to write one generated file per Kubernetes resource. Both executables must be available on `PATH`, or supplied with `--kustomize` and `--yq`.
 
 Render one Kustomization:
 
 ```bash
-homelab render \
+homelab argocd render \
   --path argocd/infrastructure/cilium \
   --output artifacts/infrastructure/cilium
 ```
@@ -40,18 +38,29 @@ homelab render \
 Render every direct child of the default `argocd/infrastructure` source root:
 
 ```bash
-homelab render --all
+homelab argocd render --all
 ```
 
 Override the roots when a repository uses another layout:
 
 ```bash
-homelab render --all \
+homelab argocd render --all \
   --source-root path/to/sources \
   --output-root path/to/artifacts
 ```
 
 Rendering replaces each target output directory only after Kustomize and resource splitting succeed. It substitutes the supported public identifiers `ARGOCD_GITHUB_REPO`, `ARGOCD_GITHUB_ORG`, `VAULT`, and `ARGOCD_ADMIN_GITHUB_USER`, using their homelab defaults when unset.
+
+## Router operations
+
+Router functionality is available only through `homelab router`. Existing router flags and safety gates are retained:
+
+```bash
+homelab router validate --profile path/to/profile
+homelab router plan --profile path/to/profile --target router.example --host-fingerprint SHA256:...
+```
+
+Use `homelab router --help` for the full command set. Mutating commands retain their explicit `--authorize` requirements and pinned-host-key checks.
 
 ## Releases
 
@@ -65,7 +74,7 @@ The workflow:
 4. Generates the release changelog for the exact range.
 5. Runs `go test ./...` and `go vet ./...`.
 6. Creates an annotated tag whose message is the changelog.
-7. Uses GoReleaser to package and publish `homelab` and `routerctl`.
+7. Uses GoReleaser to package and publish `homelab`.
 8. Uses the same changelog as the non-empty GitHub release body.
 9. Verifies all archives, checksums, and release notes before notifying the Hermit package index.
 

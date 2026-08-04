@@ -126,10 +126,6 @@ jobs:
           homelab_${version}_Darwin_arm64.tar.gz
           homelab_${version}_Linux_amd64.tar.gz
           homelab_${version}_Linux_arm64.tar.gz
-          routerctl_${version}_Darwin_amd64.tar.gz
-          routerctl_${version}_Darwin_arm64.tar.gz
-          routerctl_${version}_Linux_amd64.tar.gz
-          routerctl_${version}_Linux_arm64.tar.gz
           checksums.txt"
           actual=$(gh release view "$TAG" --json assets --jq '.assets[].name' | sort)
           test "$actual" = "$(printf '%s\n' "$expected" | sort)"
