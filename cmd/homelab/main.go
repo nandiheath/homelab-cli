@@ -23,7 +23,7 @@ type CLI struct {
 }
 
 type Argocd struct {
-	Render Render `cmd:"" help:"Render Kustomize sources into Kubernetes manifest files."`
+	Render Render `cmd:"" help:"Render Helm or Kustomize sources into Kubernetes manifest files."`
 }
 
 type Router struct {
@@ -35,16 +35,31 @@ func (r Router) Run() error {
 }
 
 type Render struct {
-	Path          string `help:"Kustomize directory to render." xor:"target"`
-	All           bool   `help:"Render every direct child of --source-root." xor:"target"`
+	Path          string `help:"Helm or Kustomize source directory to render." xor:"target"`
+	All           bool   `help:"Render every source discovered recursively below --source-root." xor:"target"`
 	CI            bool   `help:"Render source directories changed by the current CI event." xor:"target"`
-	CommitAndPush bool   `help:"Commit artifact-only changes and push them to the current pull-request branch."`
-	SourceRoot    string `default:"argocd/infrastructure" help:"Source root used with --all and --ci."`
+	CommitAndPush bool   `help:"Commit artifact-only changes and push them to the current branch."`
+	FailOnChange  bool   `help:"Return a failure after changed artifacts are committed and pushed."`
+	SourceRoot    string `default:"argocd" help:"Source root used with --all and --ci."`
 	Output        string `help:"Output directory for --path."`
-	OutputRoot    string `default:"artifacts/infrastructure" help:"Output root used with --all and --ci."`
+	OutputRoot    string `default:"artifacts" help:"Output root used with --all and --ci."`
+	Helm          string `default:"helm" help:"Helm executable."`
 	Kustomize     string `default:"kustomize" help:"Kustomize executable."`
 	YQ            string `default:"yq" help:"yq executable used to split resources."`
 	Git           string `default:"git" help:"Git executable used by CI mode."`
+}
+
+type renderEngine string
+
+const (
+	engineHelm      renderEngine = "helm"
+	engineKustomize renderEngine = "kustomize"
+)
+
+type sourceUnit struct {
+	Source   string
+	Relative string
+	Engine   renderEngine
 }
 
 type Version struct{}
@@ -63,6 +78,9 @@ func main() {
 }
 
 func (r *Render) Run() error {
+	if r.FailOnChange && !r.CommitAndPush {
+		return fmt.Errorf("--fail-on-change requires --commit-and-push")
+	}
 	switch {
 	case r.CI:
 		if r.Output != "" {
@@ -75,17 +93,8 @@ func (r *Render) Run() error {
 		if r.Output != "" {
 			return fmt.Errorf("--output cannot be used with --all; use --output-root")
 		}
-		entries, err := os.ReadDir(r.SourceRoot)
-		if err != nil {
+		if err := r.renderAll(); err != nil {
 			return err
-		}
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			if err := r.render(filepath.Join(r.SourceRoot, entry.Name()), filepath.Join(r.OutputRoot, entry.Name())); err != nil {
-				return err
-			}
 		}
 	case r.Path != "":
 		if r.Output == "" {
@@ -98,7 +107,13 @@ func (r *Render) Run() error {
 		return fmt.Errorf("one of --path, --all, --ci, or --commit-and-push is required")
 	}
 	if r.CommitAndPush {
-		return r.commitAndPush()
+		changed, err := r.commitAndPush()
+		if err != nil {
+			return err
+		}
+		if changed && r.FailOnChange {
+			return fmt.Errorf("rendered artifacts changed and were committed")
+		}
 	}
 	return nil
 }
@@ -139,66 +154,99 @@ func (r *Render) renderChangedSources() error {
 	if err != nil {
 		return err
 	}
-	sourceNames := map[string]struct{}{}
+	changedPaths := make([]string, 0)
 	for _, changedPath := range bytes.Split(changed, []byte{0}) {
 		if len(changedPath) == 0 {
 			continue
 		}
 		relative, err := filepath.Rel(filepath.Clean(r.SourceRoot), filepath.FromSlash(string(changedPath)))
-		if err != nil {
-			return fmt.Errorf("map changed source %s: %w", changedPath, err)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("map changed source %s", changedPath)
 		}
-		parts := strings.Split(filepath.ToSlash(relative), "/")
-		if len(parts) < 2 || parts[0] == "." || parts[0] == ".." {
-			continue
-		}
-		sourceNames[parts[0]] = struct{}{}
+		changedPaths = append(changedPaths, relative)
 	}
-	if len(sourceNames) == 0 {
+	if len(changedPaths) == 0 {
 		fmt.Println("No changed manifest sources.")
 		return nil
 	}
-	names := make([]string, 0, len(sourceNames))
-	for name := range sourceNames {
-		names = append(names, name)
+
+	units, err := discoverSourceUnits(r.SourceRoot)
+	if err != nil {
+		return err
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		source := filepath.Join(r.SourceRoot, name)
-		output := filepath.Join(r.OutputRoot, name)
-		_, err := os.Stat(filepath.Join(source, "kustomization.yaml"))
-		switch {
-		case err == nil:
-			if err := r.render(source, output); err != nil {
-				return err
+	current := make(map[string]sourceUnit, len(units))
+	affected := map[string]sourceUnit{}
+	for _, unit := range units {
+		current[unit.Relative] = unit
+		for _, changedPath := range changedPaths {
+			if pathWithin(unit.Relative, changedPath) {
+				affected[unit.Relative] = unit
+				break
 			}
-		case os.IsNotExist(err):
-			if err := os.RemoveAll(output); err != nil {
-				return fmt.Errorf("remove deleted source output %s: %w", output, err)
-			}
-		default:
-			return fmt.Errorf("inspect changed source %s: %w", source, err)
 		}
+	}
+	outputs, err := discoverOutputUnits(r.OutputRoot)
+	if err != nil {
+		return err
+	}
+	deleted := map[string]struct{}{}
+	for _, output := range outputs {
+		if _, exists := current[output]; exists {
+			continue
+		}
+		for _, changedPath := range changedPaths {
+			if pathWithin(output, changedPath) {
+				deleted[output] = struct{}{}
+				break
+			}
+		}
+	}
+
+	paths := make([]string, 0, len(affected))
+	for path := range affected {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		unit := affected[path]
+		if err := r.render(unit.Source, filepath.Join(r.OutputRoot, unit.Relative)); err != nil {
+			return err
+		}
+	}
+	deletedPaths := make([]string, 0, len(deleted))
+	for path := range deleted {
+		deletedPaths = append(deletedPaths, path)
+	}
+	sort.Strings(deletedPaths)
+	for _, path := range deletedPaths {
+		output := filepath.Join(r.OutputRoot, path)
+		if err := os.RemoveAll(output); err != nil {
+			return fmt.Errorf("remove deleted source output %s: %w", output, err)
+		}
+		removeEmptyParents(filepath.Dir(output), filepath.Clean(r.OutputRoot))
+	}
+	if len(paths) == 0 && len(deletedPaths) == 0 {
+		fmt.Println("No changed manifest sources.")
 	}
 	return nil
 }
 
-func (r *Render) commitAndPush() error {
+func (r *Render) commitAndPush() (bool, error) {
 	status, err := r.gitOutput("status", "--porcelain=v1", "-z", "--untracked-files=all")
 	if err != nil {
-		return err
+		return false, err
 	}
 	paths, err := parseStatusPaths(status)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if len(paths) == 0 {
 		fmt.Println("Rendered artifacts are current.")
-		return nil
+		return false, nil
 	}
 	for _, path := range paths {
 		if !pathWithin(r.OutputRoot, path) {
-			return fmt.Errorf("refusing to commit non-artifact change %s", path)
+			return false, fmt.Errorf("refusing to commit non-artifact change %s", path)
 		}
 	}
 	for _, args := range [][]string{
@@ -208,25 +256,27 @@ func (r *Render) commitAndPush() error {
 		{"commit", "-m", "chore(artifacts): render changed manifests"},
 	} {
 		if _, err := r.gitOutput(args...); err != nil {
-			return err
+			return false, err
 		}
 	}
 	_, target, err := ciGitContext()
 	if err != nil {
-		return err
+		return false, err
 	}
 	if target == "" {
 		branch, err := r.gitOutput("branch", "--show-current")
 		if err != nil {
-			return err
+			return false, err
 		}
 		target = strings.TrimSpace(string(branch))
 	}
 	if target == "" {
-		return fmt.Errorf("cannot determine branch for artifact push")
+		return false, fmt.Errorf("cannot determine branch for artifact push")
 	}
-	_, err = r.gitOutput("push", "origin", "HEAD:"+target)
-	return err
+	if _, err = r.gitOutput("push", "origin", "HEAD:"+target); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (r *Render) gitOutput(args ...string) ([]byte, error) {
@@ -299,14 +349,179 @@ func parseStatusPaths(status []byte) ([]string, error) {
 	return paths, nil
 }
 
+func discoverSourceUnits(root string) ([]sourceUnit, error) {
+	if _, err := os.Stat(root); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	units := make([]sourceUnit, 0)
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() || path == root {
+			return nil
+		}
+		engine, err := detectRenderEngine(path)
+		if err != nil {
+			return err
+		}
+		if engine == "" {
+			return nil
+		}
+		relative, err := filepath.Rel(filepath.Clean(root), path)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("map source path %s below %s", path, root)
+		}
+		units = append(units, sourceUnit{Source: path, Relative: relative, Engine: engine})
+		return filepath.SkipDir
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(units, func(i, j int) bool {
+		return filepath.ToSlash(units[i].Relative) < filepath.ToSlash(units[j].Relative)
+	})
+	return units, nil
+}
+
+func detectRenderEngine(source string) (renderEngine, error) {
+	chart, err := fileExists(filepath.Join(source, "Chart.yaml"))
+	if err != nil {
+		return "", err
+	}
+	values, err := fileExists(filepath.Join(source, "values.yaml"))
+	if err != nil {
+		return "", err
+	}
+	kustomization, err := fileExists(filepath.Join(source, "kustomization.yaml"))
+	if err != nil {
+		return "", err
+	}
+	if chart && kustomization {
+		return "", fmt.Errorf("source %s is ambiguous: Chart.yaml and kustomization.yaml are both present", source)
+	}
+	if chart && !values {
+		return "", fmt.Errorf("Helm source %s requires values.yaml", source)
+	}
+	if values && !chart && !kustomization {
+		return "", fmt.Errorf("source %s has values.yaml without Chart.yaml or kustomization.yaml", source)
+	}
+	switch {
+	case chart:
+		return engineHelm, nil
+	case kustomization:
+		return engineKustomize, nil
+	default:
+		return "", nil
+	}
+}
+
+func fileExists(path string) (bool, error) {
+	info, err := os.Stat(path)
+	switch {
+	case err == nil && info.Mode().IsRegular():
+		return true, nil
+	case err == nil:
+		return false, fmt.Errorf("source marker %s is not a regular file", path)
+	case os.IsNotExist(err):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
+func discoverOutputUnits(root string) ([]string, error) {
+	if _, err := os.Stat(root); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var units []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() || path == root {
+			return nil
+		}
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return err
+		}
+		for _, child := range entries {
+			extension := strings.ToLower(filepath.Ext(child.Name()))
+			if !child.IsDir() && (extension == ".yml" || extension == ".yaml") {
+				relative, err := filepath.Rel(filepath.Clean(root), path)
+				if err != nil {
+					return err
+				}
+				units = append(units, relative)
+				return filepath.SkipDir
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(units)
+	return units, nil
+}
+
+func removeEmptyParents(path, stop string) {
+	for path != stop && pathWithin(stop, path) {
+		entries, err := os.ReadDir(path)
+		if err != nil || len(entries) != 0 {
+			return
+		}
+		if err := os.Remove(path); err != nil {
+			return
+		}
+		path = filepath.Dir(path)
+	}
+}
+
+func (r *Render) renderAll() error {
+	units, err := discoverSourceUnits(r.SourceRoot)
+	if err != nil {
+		return err
+	}
+	outputRoot := filepath.Clean(r.OutputRoot)
+	if err := os.MkdirAll(filepath.Dir(outputRoot), 0755); err != nil {
+		return err
+	}
+	staging, err := os.MkdirTemp(filepath.Dir(outputRoot), "."+filepath.Base(outputRoot)+".staging-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(staging)
+	for _, unit := range units {
+		if err := r.render(unit.Source, filepath.Join(staging, unit.Relative)); err != nil {
+			return err
+		}
+	}
+	if err := os.RemoveAll(outputRoot); err != nil {
+		return err
+	}
+	return os.Rename(staging, outputRoot)
+}
+
 func pathWithin(root, path string) bool {
 	relative, err := filepath.Rel(filepath.Clean(root), filepath.FromSlash(path))
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func (r *Render) render(source, output string) error {
-	if _, err := os.Stat(filepath.Join(source, "kustomization.yaml")); err != nil {
-		return fmt.Errorf("validate source %s: %w", source, err)
+	engine, err := detectRenderEngine(source)
+	if err != nil {
+		return err
+	}
+	if engine == "" {
+		return fmt.Errorf("source %s has no Chart.yaml or kustomization.yaml", source)
 	}
 	tmp, err := os.MkdirTemp("", "homelab-render-")
 	if err != nil {
@@ -316,10 +531,32 @@ func (r *Render) render(source, output string) error {
 	if err := copyAndInterpolate(source, tmp); err != nil {
 		return err
 	}
-	build := exec.Command(r.Kustomize, "build", "--enable-helm", tmp)
-	manifest, err := build.Output()
-	if err != nil {
-		return fmt.Errorf("kustomize build %s: %w", source, err)
+
+	var manifest []byte
+	switch engine {
+	case engineKustomize:
+		build := exec.Command(r.Kustomize, "build", "--enable-helm", tmp)
+		manifest, err = build.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("kustomize build %s: %s: %w", source, strings.TrimSpace(string(manifest)), err)
+		}
+	case engineHelm:
+		dependency := exec.Command(r.Helm, "dependency", "build", tmp)
+		if output, dependencyErr := dependency.CombinedOutput(); dependencyErr != nil {
+			return fmt.Errorf("helm dependency build %s: %s: %w", source, strings.TrimSpace(string(output)), dependencyErr)
+		}
+		releaseName := strings.ToLower(strings.NewReplacer("_", "-", ".", "-").Replace(filepath.Base(filepath.Clean(source))))
+		build := exec.Command(r.Helm, "template", releaseName, tmp, "--values", filepath.Join(tmp, "values.yaml"), "--include-crds")
+		manifest, err = build.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("helm template %s: %s: %w", source, strings.TrimSpace(string(manifest)), err)
+		}
+	default:
+		return fmt.Errorf("unsupported render engine %q", engine)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(output), 0755); err != nil {
+		return err
 	}
 	staging := output + ".staging"
 	if err := os.RemoveAll(staging); err != nil {
