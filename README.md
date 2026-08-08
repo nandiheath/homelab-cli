@@ -25,9 +25,9 @@ goreleaser release --snapshot --clean
 
 ## Argo CD rendering
 
-`homelab argocd render` delegates builds to `kustomize build --enable-helm` and uses `yq` to write one generated file per Kubernetes resource. Both executables must be available on `PATH`, or supplied with `--kustomize` and `--yq`.
+`homelab argocd render` discovers native Helm and Kustomize source units and uses `yq` to write one generated file per Kubernetes resource. A Helm unit contains `Chart.yaml` and `values.yaml`; a Kustomize unit contains `kustomization.yaml`. A directory containing both markers, an incomplete Helm unit, or a values-only unit fails closed. `helm`, `kustomize`, and `yq` must be available on `PATH`, or supplied with the corresponding command flags.
 
-Render one Kustomization:
+Render one source:
 
 ```bash
 homelab argocd render \
@@ -35,13 +35,15 @@ homelab argocd render \
   --output artifacts/infrastructure/cilium
 ```
 
-Render every direct child of the default `argocd/infrastructure` source root:
+Render every source discovered recursively below the default `argocd/` root:
 
 ```bash
 homelab argocd render --all
 ```
 
-In CI, render only source directories changed by the current GitHub event. The default mapping is `argocd/infrastructure/<name>` to `artifacts/infrastructure/<name>`:
+The source-relative layout is preserved below `artifacts/`, for example `argocd/application/immich` renders to `artifacts/application/immich`. A complete render atomically replaces the output root, removing stale outputs.
+
+In CI, render only source units changed by the current GitHub event:
 
 ```bash
 homelab argocd render --ci
@@ -49,13 +51,13 @@ homelab argocd render --ci
 
 CI mode requires a clean worktree, reads the push or pull-request base from `GITHUB_EVENT_PATH`, and falls back to `HEAD^` for manual runs. Deleting a source removes its matching output directory.
 
-After repository validation, explicitly commit artifact-only changes and push them to the current pull-request branch:
+After repository validation, explicitly commit artifact-only changes and push them to the current branch:
 
 ```bash
 homelab argocd render --commit-and-push
 ```
 
-The commit step is a no-op when artifacts are current and refuses to commit if any changed path is outside `--output-root`. `--ci --commit-and-push` combines both phases when no validation step needs to run between them.
+The commit step is a no-op when artifacts are current and refuses to commit if any changed path is outside `--output-root`. Add `--fail-on-change` when CI must push generated artifacts and then fail the original source-only run. `--ci --commit-and-push` combines both phases only when no validation step needs to run between them.
 
 Override the roots when a repository uses another layout:
 
@@ -65,7 +67,7 @@ homelab argocd render --all \
   --output-root path/to/artifacts
 ```
 
-Rendering replaces each target output directory only after Kustomize and resource splitting succeed. It substitutes the supported public identifiers `ARGOCD_GITHUB_REPO`, `ARGOCD_GITHUB_ORG`, `VAULT`, and `ARGOCD_ADMIN_GITHUB_USER`, using their homelab defaults when unset.
+Kustomize execution uses `kustomize build --enable-helm`. Helm execution runs `helm dependency build` in an isolated source copy, then `helm template` with the unit's `values.yaml` and CRDs included. Rendering replaces an individual target only after source execution and resource splitting succeed. It substitutes the supported public identifiers `ARGOCD_GITHUB_REPO`, `ARGOCD_GITHUB_ORG`, `VAULT`, and `ARGOCD_ADMIN_GITHUB_USER`, using their homelab defaults when unset.
 
 ## Router operations
 
